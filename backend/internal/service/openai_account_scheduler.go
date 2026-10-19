@@ -1046,7 +1046,6 @@ func (s *defaultOpenAIAccountScheduler) buildOpenAIAccountLoadPlan(
 	if plan.topK <= 0 {
 		plan.topK = 1
 	}
-
 	plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
 	return plan
 }
@@ -1564,6 +1563,14 @@ func (s *defaultOpenAIAccountScheduler) trySelectByLoadBalancePool(
 	budget *openAISelectionProbeBudget,
 ) openAIAccountLoadSelectionAttempt {
 	plan := s.buildOpenAIAccountLoadPlan(ctx, req, filtered, loadMap)
+	// Top-K 只决定首选池，不能成为可用性上限：快照可能尚未同步模型冷却。
+	// 仅在执行选号时补齐同组后备账号，保留评分计划原有的成本排序语义，
+	// 并沿用共享预算限制抢槽和数据库复查，避免无可用账号时无界扫描。
+	if !plan.includeOverflowFallback && len(plan.candidates) > plan.topK {
+		plan.includeOverflowFallback = true
+		plan.selectionOrder = s.buildOpenAISelectionOrder(req, plan)
+		budget.enableLimit()
+	}
 	if openAICostOverflowExpanded(req, plan) {
 		budget.enableLimit()
 	}
@@ -1786,6 +1793,10 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIAccountRequestRuntimeBlocked(account, req.RequestedModel) {
 		return false, "runtime_blocked"
+	}
+	// 已知的模型级冷却在评分前排除，避免限流账号占满 Top-K；其他模型不受影响。
+	if account.isModelRateLimitedWithContext(ctx, req.RequestedModel) {
+		return false, "model_rate_limited"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
 		return false, "proxy_stream_quarantined"
