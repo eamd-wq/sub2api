@@ -8,7 +8,8 @@ import (
 	"github.com/robfig/cron/v3"
 )
 
-var scheduledTestCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow)
+// 同时支持 @every 间隔表达式，避免每 5 小时等周期在跨午夜时被每日小时字段截短。
+var scheduledTestCronParser = cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 // ScheduledTestService provides CRUD operations for scheduled test plans and results.
 type ScheduledTestService struct {

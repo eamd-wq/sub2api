@@ -19,6 +19,14 @@ import (
 
 // Forward forwards request to OpenAI API
 func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, account *Account, body []byte) (*OpenAIForwardResult, error) {
+	if account != nil && account.IsOpenAIApiKey() {
+		if extra, followClient := openai_compat.ResponsesExtraForClientProtocol(account.Extra); followClient {
+			// 仅当前 Responses 请求使用原生端点；保留共享账号，Chat/Messages 仍走原配置。
+			requestAccount := *account
+			requestAccount.Extra = extra
+			account = &requestAccount
+		}
+	}
 	beginUpstreamResponseModelObservation(c)
 	ClearActualOpenAIUpstreamEndpoint(c)
 	if shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
@@ -1406,6 +1414,10 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// previous_response_id，避免携带状态字段被上游拒绝。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
 
+	body, err := filterOpenAIReasoningSummaryForAccount(account, body)
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, bytes.NewReader(body))
 	if err != nil {
 		return nil, err

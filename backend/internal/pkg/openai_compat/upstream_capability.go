@@ -17,6 +17,8 @@
 //     pensieve/short-term/maxims/preserve-existing-runtime-behavior-when-replacing-logic-in-stateful-systems）
 package openai_compat
 
+import "maps"
+
 // AccountResponsesSupport 描述账号上游对 OpenAI Responses API 的有效支持状态。
 //
 // 仅用于 platform=openai + type=apikey 的账号；其他账号类型不应调用本包判定。
@@ -57,6 +59,28 @@ const ExtraKeyResponsesMode = "openai_responses_mode"
 // ExtraKeyResponsesSupported 是 accounts.extra JSON 中存储自动探测结果的键名。
 // 值类型为 bool：true=支持、false=不支持、键缺失=未探测。
 const ExtraKeyResponsesSupported = "openai_responses_supported"
+
+// ExtraKeyFollowClientProtocol 让 OpenAI API Key 账号按客户端入口选择上游协议。
+// Chat/Messages 保持账号原有回退配置，Responses 请求使用独立的原生转发配置。
+const ExtraKeyFollowClientProtocol = "openai_follow_client_protocol"
+
+// ExtraKeyStripReasoningSummary 为不支持摘要控制参数的 API Key 账号移除 reasoning.summary。
+// 只过滤请求选项，保留 reasoning.effort、输入历史及响应中的思考内容。
+const ExtraKeyStripReasoningSummary = "openai_strip_reasoning_summary"
+
+// ResponsesExtraForClientProtocol 为原生 Responses 请求派生路由配置。
+// 调度缓存中的 extra 会被并发请求共享，必须复制后覆盖，避免串改 Chat 的路由。
+func ResponsesExtraForClientProtocol(extra map[string]any) (map[string]any, bool) {
+	enabled, _ := extra[ExtraKeyFollowClientProtocol].(bool)
+	if !enabled {
+		return nil, false
+	}
+	requestExtra := maps.Clone(extra)
+	// 当前入口已确定为 Responses，不再应用 Chat 入口的直转优先级。
+	requestExtra[ExtraKeyFollowClientProtocol] = false
+	requestExtra[ExtraKeyResponsesMode] = string(ResponsesSupportModeForceResponses)
+	return requestExtra, true
+}
 
 // NormalizeResponsesSupportMode 归一化账号级 Responses API 路由覆盖模式。
 // 缺失或非法值按 auto 处理，以保持存量行为。
@@ -111,5 +135,9 @@ func ResolveResponsesSupport(extra map[string]any) AccountResponsesSupport {
 // 仅当账号已探测且确认不支持时返回 false，此时调用方应走 CC 直转路径
 // （详见 internal/service/openai_gateway_chat_completions_raw.go）。
 func ShouldUseResponsesAPI(extra map[string]any) bool {
+	// 按客户端协议转发时，Chat 入口始终直转，不受后台探测结果覆盖。
+	if followClient, _ := extra[ExtraKeyFollowClientProtocol].(bool); followClient {
+		return false
+	}
 	return ResolveResponsesSupport(extra) != ResponsesSupportNo
 }

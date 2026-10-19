@@ -14,6 +14,7 @@ import (
 	"github.com/Wei-Shaw/sub2api/internal/config"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/apicompat"
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
 	"github.com/Wei-Shaw/sub2api/internal/util/urlvalidator"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -127,6 +128,23 @@ func deleteOpenAIResponsesNoneReasoningEffortFromObject(account *Account, body m
 	if len(reasoning) == 0 {
 		delete(body, "reasoning")
 	}
+}
+
+// filterOpenAIReasoningSummaryForAccount 在最终 HTTP 出站点过滤不支持的摘要控制参数。
+// 按账号显式启用，避免影响其他上游；精确删除此路径，保留 effort 和其他 summary 字段。
+func filterOpenAIReasoningSummaryForAccount(account *Account, body []byte) ([]byte, error) {
+	if account == nil || !account.IsOpenAIApiKey() {
+		return body, nil
+	}
+	enabled, _ := account.Extra[openai_compat.ExtraKeyStripReasoningSummary].(bool)
+	if !enabled || !gjson.GetBytes(body, "reasoning.summary").Exists() {
+		return body, nil
+	}
+	filtered, err := sjson.DeleteBytes(body, "reasoning.summary")
+	if err != nil {
+		return nil, fmt.Errorf("strip unsupported reasoning.summary: %w", err)
+	}
+	return filtered, nil
 }
 
 // normalizeDeepSeekResponsesRequestBody 适配无状态 CN Responses 端点：
