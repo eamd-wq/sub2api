@@ -487,6 +487,7 @@ type OpenAIGatewayService struct {
 	openaiModelTransient           *openAIAccountModelTransientState
 	openaiProxyStreamCircuit       *openAIProxyStreamCircuit
 	openaiProxyStreamFailOpenLogAt atomic.Int64
+	openaiRateLimitWaiters         atomic.Int64 // 仅统计正在等待 RPM/TPM 冷却的请求，不占账号槽位。
 
 	openaiWSFallbackUntil               sync.Map // key: int64(accountID), value: time.Time
 	openaiAccountRuntimeBlockUntil      sync.Map // key: int64(accountID), value: time.Time

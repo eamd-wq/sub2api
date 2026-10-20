@@ -158,6 +158,8 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		return
 	}
 	defer inflightRelease()
+	waitCtx, rateLimitWait := h.gatewayService.WithOpenAIRateLimitWait(c.Request.Context())
+	c.Request = c.Request.WithContext(waitCtx)
 
 	sessionHash := h.gatewayService.GenerateSessionHash(c, body)
 	promptCacheKey := h.gatewayService.ExtractSessionID(c, body)
@@ -196,6 +198,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_chat_completions.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if h.handleRateLimitWaitError(c, err, streamStarted, false) {
 				return
 			}
 			reqLog.Warn("openai_chat_completions.account_select_failed",
@@ -350,8 +355,9 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
+					rpmTPMLimited := rateLimitWait.RecordFailover(account, failoverErr)
 					// Pool mode: retry on the same account
-					if failoverErr.RetryableOnSameAccount {
+					if failoverErr.RetryableOnSameAccount && !rpmTPMLimited {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
@@ -374,7 +380,8 @@ func (h *OpenAIGatewayHandler) ChatCompletions(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					// 明确的分钟级限流允许遍历完整池，由共享等待预算限制恢复轮次。
+					if switchCount >= maxAccountSwitches && !rpmTPMLimited {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}

@@ -648,6 +648,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	var passthroughFailoverState openAIPassthroughFailoverState
+	waitCtx, rateLimitWait := h.gatewayService.WithOpenAIRateLimitWait(c.Request.Context())
+	c.Request = c.Request.WithContext(waitCtx)
 
 	// 生图意图的 /v1/responses 请求必须调度到确实支持 Responses API 的账号，否则
 	// 会在 forward 阶段被静默降级为无法生图的 Chat Completions 直转（#4417）。
@@ -690,6 +692,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if h.handleRateLimitWaitError(c, err, streamStarted, false) {
 				return
 			}
 			reqLog.Warn("openai.account_select_failed",
@@ -912,8 +917,9 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
+					rpmTPMLimited := rateLimitWait.RecordFailover(account, failoverErr)
 					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					if failoverErr.RetryableOnSameAccount && !rpmTPMLimited {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
@@ -936,7 +942,8 @@ func (h *OpenAIGatewayHandler) Responses(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					// RPM/TPM 完整遍历账号池后才等待，累计等待仍受请求预算限制。
+					if switchCount >= maxAccountSwitches && !rpmTPMLimited {
 						h.handleFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
@@ -1292,6 +1299,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 	var lastFailoverErr *service.UpstreamFailoverError
 	var oauth429FailoverState service.OpenAIOAuth429FailoverState
 	effectiveMappedModel := preferredMappedModel
+	waitCtx, rateLimitWait := h.gatewayService.WithOpenAIRateLimitWait(c.Request.Context())
+	c.Request = c.Request.WithContext(waitCtx)
 
 	// 分组利润控制：Messages 文本入口同样请求级装门并固定 pricingAt。
 	msgPricingCtx, pricingAt := h.gatewayService.WithOpenAIRequestPricingContext(c.Request.Context(), apiKey.GroupID)
@@ -1323,6 +1332,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 		if err != nil {
 			if failoverClientGone(c) {
 				reqLog.Info("openai_messages.account_select_aborted_client_disconnected", zap.Error(err))
+				return
+			}
+			if h.handleRateLimitWaitError(c, err, streamStarted, true) {
 				return
 			}
 			reqLog.Warn("openai_messages.account_select_failed",
@@ -1480,8 +1492,9 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}
+					rpmTPMLimited := rateLimitWait.RecordFailover(account, failoverErr)
 					// 池模式：同账号重试
-					if failoverErr.RetryableOnSameAccount {
+					if failoverErr.RetryableOnSameAccount && !rpmTPMLimited {
 						retryLimit := effectiveSameAccountRetryLimit(failoverErr, account)
 						if sameAccountRetryAllowed(failoverErr, sameAccountRetryCount[account.ID], retryLimit) {
 							sameAccountRetryCount[account.ID]++
@@ -1504,7 +1517,8 @@ func (h *OpenAIGatewayHandler) Messages(c *gin.Context) {
 					h.gatewayService.RecordOpenAIAccountSwitch()
 					failedAccountIDs[account.ID] = struct{}{}
 					lastFailoverErr = failoverErr
-					if switchCount >= maxAccountSwitches {
+					// RPM/TPM 的等待与换号策略与 Chat、Responses 共用同一实现。
+					if switchCount >= maxAccountSwitches && !rpmTPMLimited {
 						h.handleAnthropicFailoverExhausted(c, failoverErr, streamStarted)
 						return
 					}

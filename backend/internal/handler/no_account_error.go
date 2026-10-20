@@ -2,11 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -35,6 +37,27 @@ type noAccountErrorClassification struct {
 }
 
 var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited|rate_limited)=(\d+)`)
+
+// handleRateLimitWaitError 在真正耗尽服务器端等待预算后再返回 429，避免被最后一次上游错误覆盖。
+func (h *OpenAIGatewayHandler) handleRateLimitWaitError(c *gin.Context, err error, streamStarted, anthropic bool) bool {
+	var waitErr *service.OpenAIRateLimitWaitError
+	if !errors.As(err, &waitErr) {
+		return false
+	}
+	seconds := max(1, int((waitErr.RetryAfter+time.Second-1)/time.Second))
+	c.Header("Retry-After", strconv.Itoa(seconds))
+	message := "All available accounts are currently rate-limited. Server-side wait limit reached; please retry later."
+	if waitErr.QueueFull {
+		message = "All available accounts are currently rate-limited and the server-side waiting queue is full. Please retry later."
+	}
+	markOpsRoutingCapacityLimited(c)
+	if anthropic {
+		h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", message, streamStarted)
+	} else {
+		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", message, streamStarted)
+	}
+	return true
+}
 
 // classifySelectionFailureError preserves the scheduler's compact reason when
 // every model-capable account is temporarily rate limited.

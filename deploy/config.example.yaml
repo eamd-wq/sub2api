@@ -553,6 +553,10 @@ gateway:
     # Fallback wait timeout (duration)
     # 兜底排队等待超时（时间段）
     fallback_wait_timeout: 30s
+    # HTTP 文本请求整池 RPM/TPM 冷却时按最早重置点等待；跨换号累计，0 禁用。
+    rate_limit_wait_timeout: 75s
+    # 每个网关实例最多同时等待的请求数；超出或超时返回 429 和 Retry-After。
+    rate_limit_max_waiting: 64
     # Fallback max waiting queue size
     # 兜底最大排队长度
     fallback_max_waiting: 100

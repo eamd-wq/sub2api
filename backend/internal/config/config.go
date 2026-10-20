@@ -1498,6 +1498,10 @@ type GatewaySchedulingConfig struct {
 	FallbackWaitTimeout time.Duration `mapstructure:"fallback_wait_timeout"`
 	FallbackMaxWaiting  int           `mapstructure:"fallback_max_waiting"`
 
+	// RPM/TPM 整池冷却时的请求级等待上限；0 禁用。MaxWaiting 限制每实例等待请求总数。
+	RateLimitWaitTimeout time.Duration `mapstructure:"rate_limit_wait_timeout"`
+	RateLimitMaxWaiting  int           `mapstructure:"rate_limit_max_waiting"`
+
 	// 兜底层账户选择策略: "last_used"(按最后使用时间排序，默认) 或 "random"(随机)
 	FallbackSelectionMode string `mapstructure:"fallback_selection_mode"`
 
@@ -2554,6 +2558,8 @@ func setDefaults() {
 	viper.SetDefault("gateway.scheduling.sticky_session_wait_timeout", 120*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_wait_timeout", 30*time.Second)
 	viper.SetDefault("gateway.scheduling.fallback_max_waiting", 100)
+	viper.SetDefault("gateway.scheduling.rate_limit_wait_timeout", 75*time.Second)
+	viper.SetDefault("gateway.scheduling.rate_limit_max_waiting", 64)
 	viper.SetDefault("gateway.scheduling.fallback_selection_mode", "last_used")
 	viper.SetDefault("gateway.scheduling.prefer_soonest_reset", false)
 	viper.SetDefault("gateway.scheduling.load_batch_enabled", true)
@@ -3706,6 +3712,12 @@ func (c *Config) Validate() error {
 	}
 	if c.Gateway.Scheduling.FallbackMaxWaiting <= 0 {
 		return fmt.Errorf("gateway.scheduling.fallback_max_waiting must be positive")
+	}
+	if c.Gateway.Scheduling.RateLimitWaitTimeout < 0 || c.Gateway.Scheduling.RateLimitWaitTimeout > 2*time.Minute {
+		return fmt.Errorf("gateway.scheduling.rate_limit_wait_timeout must be between 0 and 2m")
+	}
+	if c.Gateway.Scheduling.RateLimitMaxWaiting < 0 || c.Gateway.Scheduling.RateLimitMaxWaiting > 1000 {
+		return fmt.Errorf("gateway.scheduling.rate_limit_max_waiting must be between 0 and 1000")
 	}
 	if c.Gateway.Scheduling.LoadBatchCacheTTLMS < 0 {
 		return fmt.Errorf("gateway.scheduling.load_batch_cache_ttl_ms must be non-negative")

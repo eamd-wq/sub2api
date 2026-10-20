@@ -2142,7 +2142,14 @@ func (s *OpenAIGatewayService) SelectAccountWithSchedulerForCapability(
 	if len(platformOverride) > 0 {
 		platform = platformOverride[0]
 	}
-	return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	return s.selectAccountWithRateLimitWait(ctx, OpenAIAccountScheduleRequest{
+		GroupID: groupID, Platform: NormalizeOpenAICompatiblePlatform(platform),
+		RequestedModel: requestedModel, ExcludedIDs: excludedIDs,
+		PreviousResponseID: previousResponseID, RequiredTransport: requiredTransport,
+		RequiredCapability: requiredCapability, RequireCompact: requireCompact,
+	}, func() (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
+		return s.selectAccountWithScheduler(ctx, groupID, previousResponseID, sessionHash, requestedModel, excludedIDs, requiredTransport, requiredCapability, "", requireCompact, platform, previousResponseCanMove, useUpstreamTokenCost)
+	})
 }
 
 func (s *OpenAIGatewayService) SelectAccountWithSchedulerForImages(
