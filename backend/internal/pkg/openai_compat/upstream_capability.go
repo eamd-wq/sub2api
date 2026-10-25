@@ -68,6 +68,10 @@ const ExtraKeyFollowClientProtocol = "openai_follow_client_protocol"
 // 只过滤请求选项，保留 reasoning.effort、输入历史及响应中的思考内容。
 const ExtraKeyStripReasoningSummary = "openai_strip_reasoning_summary"
 
+// ExtraKeyResponsesInputItemLimit 声明原生 Responses 的 input 项数上限。
+// 正整数启用超限请求的 Chat 兼容桥；缺失或非正数保持原来的协议选择。
+const ExtraKeyResponsesInputItemLimit = "openai_responses_input_item_limit"
+
 // ResponsesExtraForClientProtocol 为原生 Responses 请求派生路由配置。
 // 调度缓存中的 extra 会被并发请求共享，必须复制后覆盖，避免串改 Chat 的路由。
 func ResponsesExtraForClientProtocol(extra map[string]any) (map[string]any, bool) {
