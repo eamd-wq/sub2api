@@ -168,6 +168,12 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 	}
 
 	if account.IsOpenAIApiKey() {
+		if normalized, changed, normalizeErr := normalizeOpenAIParallelToolCallsWithoutTools(body, responsesLite); normalizeErr != nil {
+			return nil, normalizeErr
+		} else if changed {
+			body = normalized
+			originalBody = normalized
+		}
 		if !shouldForwardOpenAIResponsesViaRawChatCompletions(account) {
 			bridge, bridgeErr := s.shouldBridgeResponsesInputLimit(c, account, body)
 			if bridgeErr != nil {
@@ -176,12 +182,6 @@ func (s *OpenAIGatewayService) Forward(ctx context.Context, c *gin.Context, acco
 			if bridge {
 				return s.forwardResponsesViaRawChatCompletions(ctx, c, account, body, startTime)
 			}
-		}
-		if normalized, changed, normalizeErr := normalizeOpenAIParallelToolCallsWithoutTools(body, responsesLite); normalizeErr != nil {
-			return nil, normalizeErr
-		} else if changed {
-			body = normalized
-			originalBody = normalized
 		}
 		if normalized, changed, normalizeErr := normalizeOpenAIAPIKeyStoreFalseReasoningReplay(body, isOpenAIResponsesCompactPath(c)); normalizeErr != nil {
 			return nil, normalizeErr
