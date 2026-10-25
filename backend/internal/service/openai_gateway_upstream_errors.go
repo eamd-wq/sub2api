@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/Wei-Shaw/sub2api/internal/config"
@@ -193,6 +194,10 @@ func isOpenAIRequestScopedCapacityShed(upstreamMsg string, upstreamBody []byte) 
 		(!gjson.ValidBytes(upstreamBody) && isOpenAICapacityShedMessage(string(upstreamBody)))
 }
 
+// 条目数也是上下文的硬上限。只匹配明确指向 input 数组的错误，不能把 tools 等
+// Schema 上限或错误体回显的用户内容误判为需要压缩的历史。
+var openAIInputItemLimitPattern = regexp.MustCompile(`(?i)\bmaximum\s+of\s+[1-9][0-9]*\s+items\s+allowed\s+in\s+input\b`)
+
 func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 	match := func(text string) bool {
 		lower := strings.ToLower(strings.TrimSpace(text))
@@ -200,6 +205,9 @@ func isOpenAIContextWindowError(upstreamMsg string, upstreamBody []byte) bool {
 			return false
 		}
 		if strings.Contains(lower, "context_too_large") || strings.Contains(lower, "context_length_exceeded") {
+			return true
+		}
+		if openAIInputItemLimitPattern.MatchString(lower) {
 			return true
 		}
 		if strings.Contains(lower, "maximum context length") || strings.Contains(lower, "max context length") {

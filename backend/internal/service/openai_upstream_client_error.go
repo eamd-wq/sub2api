@@ -52,6 +52,15 @@ func writeOpenAIUpstreamClientError(c *gin.Context, statusCode int, body []byte,
 		message = openAIUpstreamClientErrorFallbackMessage
 	}
 	errorPayload["message"] = message
+	// 上游把 input 条目超限归为 InvalidParameter 时，DSH 等客户端不会触发
+	// 已有的自动压缩。保留原始诊断信息，只把明确的上下文上限归一成标准码；
+	// 不裁剪用户历史、不重放工具，也不通过换号重试同一份无效请求。
+	if statusCode == http.StatusBadRequest && openAIInputItemLimitPattern.MatchString(message) {
+		errorPayload["type"] = openAIUpstreamClientErrorFallbackType
+		errorPayload["code"] = "context_length_exceeded"
+		errorPayload["param"] = "input"
+		errorPayload["message"] = "Input context length exceeded: " + message
+	}
 
 	c.JSON(statusCode, gin.H{"error": errorPayload})
 }
