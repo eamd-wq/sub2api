@@ -331,6 +331,10 @@ func decideResponsesProbeSupport(status int, body []byte) bool {
 // isResponsesProbeModelUnavailable 判断 400/404 是否只是在说探测模型不可用
 // (错误码/类型为 model_not_found 等,或错误文案明确说模型不存在/不可用)。
 func isResponsesProbeModelUnavailable(status int, body []byte) bool {
+	// 模型后端路由暂不可用不能证明 Responses 端点缺失，保留原有能力标记。
+	if isUpstreamModelRouteUnavailableError(status, body) {
+		return true
+	}
 	if status != http.StatusBadRequest && status != http.StatusNotFound {
 		return false
 	}
