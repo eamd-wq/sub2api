@@ -37,6 +37,7 @@ type noAccountErrorClassification struct {
 }
 
 var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited|rate_limited)=(\d+)`)
+var selectionUpstreamModelUnavailablePattern = regexp.MustCompile(`\bupstream_model_unavailable=[1-9][0-9]*\b`)
 
 // handleRateLimitWaitError 在真正耗尽服务器端等待预算后再返回 429，避免被最后一次上游错误覆盖。
 func (h *OpenAIGatewayHandler) handleRateLimitWaitError(c *gin.Context, err error, streamStarted, anthropic bool) bool {
@@ -50,11 +51,20 @@ func (h *OpenAIGatewayHandler) handleRateLimitWaitError(c *gin.Context, err erro
 	if waitErr.QueueFull {
 		message = "All available accounts are currently rate-limited and the server-side waiting queue is full. Please retry later."
 	}
+	status, errType := http.StatusTooManyRequests, "rate_limit_error"
+	if waitErr.UpstreamUnavailable || selectionUpstreamModelUnavailablePattern.MatchString(err.Error()) {
+		// 模型路由故障即使耗尽共用等待预算，也不能变成客户端看到的假 429。
+		status, errType = http.StatusServiceUnavailable, "api_error"
+		message = "Upstream model routes are temporarily unavailable. Server-side wait limit reached; please retry later."
+		if waitErr.QueueFull {
+			message = "Upstream model routes are temporarily unavailable and the server-side waiting queue is full. Please retry later."
+		}
+	}
 	markOpsRoutingCapacityLimited(c)
 	if anthropic {
-		h.anthropicStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", message, streamStarted)
+		h.anthropicStreamingAwareError(c, status, errType, message, streamStarted)
 	} else {
-		h.handleStreamingAwareError(c, http.StatusTooManyRequests, "rate_limit_error", message, streamStarted)
+		h.handleStreamingAwareError(c, status, errType, message, streamStarted)
 	}
 	return true
 }
@@ -81,6 +91,12 @@ func classifySelectionFailureError(err error, fallback noAccountErrorClassificat
 	// sites gate markOpsRoutingCapacityLimitedIfNoAvailable on ModelNotFound.
 	if fallback.ModelNotFound {
 		return fallback
+	}
+	if selectionUpstreamModelUnavailablePattern.MatchString(err.Error()) {
+		return noAccountErrorClassification{
+			Status: http.StatusServiceUnavailable, ErrType: "api_error",
+			Message: "Upstream model routes are temporarily unavailable. Please retry later.",
+		}
 	}
 	match := selectionModelRateLimitedPattern.FindStringSubmatch(strings.ToLower(err.Error()))
 	if len(match) != 2 {

@@ -2492,6 +2492,7 @@ func parseOpenAIImageTryAgainCooldown(body []byte) time.Duration {
 }
 
 const upstreamModelNotFoundCooldown = 30 * time.Minute
+const upstreamModelRouteUnavailableCooldown = time.Minute
 const upstreamModelNotFoundReason = "upstream_404_model_not_found"
 const upstreamModelNotFound401Reason = "upstream_401_model_not_found"
 const upstreamCodexPlanGatedModelCooldown = 30 * time.Minute
@@ -2516,7 +2517,10 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 	}
 	var cooldown time.Duration
 	var reason string
+	routeUnavailable := account.Type == AccountTypeAPIKey && account.IsOpenAICompatible() && isUpstreamModelRouteUnavailableError(statusCode, responseBody)
 	switch {
+	case routeUnavailable:
+		cooldown = upstreamModelRouteUnavailableCooldown
 	case isUpstreamModelNotFoundError(statusCode, responseBody):
 		cooldown, reason = upstreamModelNotFoundCooldown, upstreamModelNotFoundReason
 	case statusCode == http.StatusUnauthorized && account.Type == AccountTypeAPIKey && account.IsOpenAICompatible() && isOpenAICompatibleModelNotFoundBody(responseBody):
@@ -2534,6 +2538,18 @@ func (s *RateLimitService) HandleUpstreamModelNotFound(ctx context.Context, acco
 		return true
 	}
 	resetAt := time.Now().Add(cooldown)
+	if routeUnavailable {
+		// 沿用已有模型级冷却格式，保存规范化原因供同请求的有界等待识别；不保存请求内容。
+		raw, err := json.Marshal(TempUnschedState{
+			UntilUnix: resetAt.Unix(), TriggeredAtUnix: time.Now().Unix(), StatusCode: statusCode,
+			MatchedKeyword: "model route not found", Scope: "model", Model: modelKey,
+			ErrorMessage: `{"error":{"code":"5","message":"model route not found","type":"not_found_error"}}`,
+		})
+		if err != nil {
+			return false
+		}
+		reason = string(raw)
+	}
 	if err := s.accountRepo.SetModelRateLimit(ctx, account.ID, modelKey, resetAt, reason); err != nil {
 		slog.Warn("upstream_model_not_found_set_model_rate_limit_failed", "account_id", account.ID, "model", modelKey, "reason", reason, "error", err)
 		return true

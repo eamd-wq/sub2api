@@ -3,12 +3,14 @@ package service
 import (
 	"net/http"
 	"strings"
+
+	"github.com/tidwall/gjson"
 )
 
 var upstreamModelNotFoundKeywords = []string{"model not found", "unknown model", "not found"}
 
 func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
-	if statusCode != http.StatusNotFound {
+	if statusCode != http.StatusNotFound || isUpstreamModelRouteUnavailableError(statusCode, body) {
 		return false
 	}
 	normalized := normalizeModelNotFoundBody(body)
@@ -16,6 +18,21 @@ func isUpstreamModelNotFoundError(statusCode int, body []byte) bool {
 		return false
 	}
 	return containsModelNotFoundKeyword(normalized)
+}
+
+// 商汤 code=5 表示模型后端路由暂不可用；已验证同一模型与账号稍后即可成功，
+// 不能据此认定账号缺少模型能力并停调半小时。只匹配明确的上游错误字段。
+func isUpstreamModelRouteUnavailableError(statusCode int, body []byte) bool {
+	if statusCode != http.StatusNotFound || !gjson.ValidBytes(body) {
+		return false
+	}
+	err := gjson.GetBytes(body, "error")
+	if !err.IsObject() {
+		err = gjson.ParseBytes(body)
+	}
+	return err.Get("code").String() == "5" &&
+		err.Get("type").String() == "not_found_error" &&
+		strings.EqualFold(strings.TrimSpace(err.Get("message").String()), "model route not found")
 }
 
 func isModelNotFoundError(statusCode int, body []byte) bool {

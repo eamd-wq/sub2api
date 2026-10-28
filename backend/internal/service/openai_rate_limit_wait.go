@@ -25,14 +25,15 @@ type openAIRateLimitWaitContextKey struct{}
 type OpenAIRateLimitWaitState struct {
 	timeout      time.Duration
 	deadline     time.Time
-	transientIDs map[int64]struct{}
+	transientIDs map[int64]int // 记录原始状态码，保留路由故障与真实限流的区别。
 }
 
 // OpenAIRateLimitWaitError 保留选号错误和实际冷却时间，供 HTTP 入口返回明确的 429。
 type OpenAIRateLimitWaitError struct {
-	RetryAfter time.Duration
-	QueueFull  bool
-	cause      error
+	RetryAfter          time.Duration
+	QueueFull           bool
+	UpstreamUnavailable bool // 等待的原因为上游路由故障时，对外保留 503 语义。
+	cause               error
 }
 
 func (e *OpenAIRateLimitWaitError) Error() string {
@@ -51,23 +52,41 @@ func (s *OpenAIGatewayService) WithOpenAIRateLimitWait(ctx context.Context) (con
 }
 
 // RecordFailover 对明确的分钟级限流直接换号，不在同一冷却账号上浪费池模式重试。
+// 明确的暂时模型路由故障也复用同一等待预算，不改变权限错误或真实模型缺失的行为。
 // 同一账号后续出现其他错误时必须撤销恢复资格，不能误清权限失败或利润门的排除项。
 func (s *OpenAIRateLimitWaitState) RecordFailover(account *Account, err *UpstreamFailoverError) bool {
 	if s == nil || account == nil {
 		return false
 	}
 	delete(s.transientIDs, account.ID)
-	if !account.IsOpenAIApiKey() || err == nil || err.StatusCode != http.StatusTooManyRequests || !err.ShouldRetryNextAccount() || !isOpenAIRPMTPMRateLimit(err.ResponseBody) {
+	if !account.IsOpenAIApiKey() || err == nil || !err.ShouldRetryNextAccount() || !isOpenAIWaitableModelError(err.StatusCode, err.ResponseBody) {
 		return false
 	}
 	if s.transientIDs == nil {
-		s.transientIDs = make(map[int64]struct{})
+		s.transientIDs = make(map[int64]int)
 	}
 	if s.deadline.IsZero() {
 		s.deadline = time.Now().Add(s.timeout)
 	}
-	s.transientIDs[account.ID] = struct{}{}
+	s.transientIDs[account.ID] = err.StatusCode
 	return true
+}
+
+func (s *OpenAIRateLimitWaitState) upstreamUnavailable(err error) bool {
+	if err != nil && strings.Contains(err.Error(), "upstream_model_unavailable=") {
+		return true
+	}
+	for _, status := range s.transientIDs {
+		if status == http.StatusNotFound {
+			return true
+		}
+	}
+	return false
+}
+
+func isOpenAIWaitableModelError(status int, body []byte) bool {
+	return (status == http.StatusTooManyRequests && isOpenAIRPMTPMRateLimit(body)) ||
+		isUpstreamModelRouteUnavailableError(status, body)
 }
 
 func isOpenAIRPMTPMRateLimit(body []byte) bool {
@@ -83,15 +102,16 @@ func isOpenAIRPMTPMRateLimit(body []byte) bool {
 		strings.Contains(message, "rpm limit") || strings.Contains(message, "tpm limit")
 }
 
-// openAIRPMTPMResetAt 仅提取已落库的 RPM/TPM 冷却；余额、日配额和未知 429 不进入短队列。
+// openAIRPMTPMResetAt 提取已落库的 RPM/TPM 与明确路由故障短冷却；余额、日配额和未知 429 不进入短队列。
 // 用副本移除这些冷却后复用完整的兼容性校验，绝不修改共享快照或放宽其他调度门。
+// 同时接受带明确 404 路由故障原因的短冷却，永久模型缺失仍不具备恢复资格。
 func openAIRPMTPMResetAt(account *Account, ctx context.Context, model string) (time.Time, *Account) {
 	var resetAt time.Time
 	var candidate *Account
 	for _, key := range account.modelRateLimitKeysForRequest(ctx, model) {
 		until := account.modelRateLimitResetAt(key)
 		var reason TempUnschedState
-		if until == nil || json.Unmarshal([]byte(account.modelRateLimitReason(key)), &reason) != nil || reason.StatusCode != http.StatusTooManyRequests || !isOpenAIRPMTPMRateLimit([]byte(reason.ErrorMessage)) {
+		if until == nil || json.Unmarshal([]byte(account.modelRateLimitReason(key)), &reason) != nil || !isOpenAIWaitableModelError(reason.StatusCode, []byte(reason.ErrorMessage)) {
 			continue
 		}
 		if until.After(resetAt) {
@@ -159,6 +179,7 @@ func (s *OpenAIGatewayService) selectAccountWithRateLimitWait(
 ) (*AccountSelectionResult, OpenAIAccountScheduleDecision, error) {
 	state, _ := ctx.Value(openAIRateLimitWaitContextKey{}).(*OpenAIRateLimitWaitState)
 	queued := false
+	var lastSelectionErr error
 	defer func() {
 		if queued {
 			s.openaiRateLimitWaiters.Add(-1)
@@ -175,6 +196,10 @@ func (s *OpenAIGatewayService) selectAccountWithRateLimitWait(
 		// 预算从首次 RPM/TPM 失败开始，换号耗时也计入；到期后不能再发起新尝试。
 		if !expired {
 			selection, decision, err = selectAccount()
+			lastSelectionErr = err
+		} else if lastSelectionErr != nil {
+			// 到期后跳过新尝试，但不能丢掉上一次真实的选号失败原因。
+			err = lastSelectionErr
 		}
 		if err == nil || state == nil || !errors.Is(err, ErrNoAvailableAccounts) {
 			return selection, decision, err
@@ -185,7 +210,7 @@ func (s *OpenAIGatewayService) selectAccountWithRateLimitWait(
 		}
 		if len(candidates) == 0 {
 			if expired {
-				return nil, decision, &OpenAIRateLimitWaitError{RetryAfter: time.Second, cause: err}
+				return nil, decision, &OpenAIRateLimitWaitError{RetryAfter: time.Second, UpstreamUnavailable: state.upstreamUnavailable(err), cause: err}
 			}
 			return selection, decision, err
 		}
@@ -200,7 +225,7 @@ func (s *OpenAIGatewayService) selectAccountWithRateLimitWait(
 		if retryAfter < time.Second {
 			retryAfter = time.Second
 		}
-		waitErr := &OpenAIRateLimitWaitError{RetryAfter: retryAfter, cause: err}
+		waitErr := &OpenAIRateLimitWaitError{RetryAfter: retryAfter, UpstreamUnavailable: state.upstreamUnavailable(err), cause: err}
 		if state.deadline.IsZero() {
 			state.deadline = now.Add(s.cfg.Gateway.Scheduling.RateLimitWaitTimeout)
 		}

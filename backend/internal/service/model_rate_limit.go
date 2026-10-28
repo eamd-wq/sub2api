@@ -2,11 +2,31 @@ package service
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/ctxkey"
 )
+
+// 模型冷却也承载上游能力/路由故障；它们不能被报告成 RPM/TPM 限流。
+// 未带原因的旧记录保留原行为，避免放开已有真实配额或限流保护。
+func (a *Account) modelCooldownFilterReason(ctx context.Context, requestedModel string) string {
+	for _, key := range a.modelRateLimitKeysForRequest(ctx, requestedModel) {
+		if !a.isRateLimitActiveForKey(key) {
+			continue
+		}
+		reason := a.modelRateLimitReason(key)
+		if reason == upstreamModelNotFoundReason || reason == upstreamModelNotFound401Reason || reason == upstreamCodexPlanGatedModelReason {
+			return "upstream_model_unavailable"
+		}
+		var state TempUnschedState
+		if json.Unmarshal([]byte(reason), &state) == nil && state.StatusCode > 0 && state.StatusCode != 429 {
+			return "upstream_model_unavailable"
+		}
+	}
+	return "model_rate_limited"
+}
 
 const (
 	modelRateLimitsKey                 = "model_rate_limits"

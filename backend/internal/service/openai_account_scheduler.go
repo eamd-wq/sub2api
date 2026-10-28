@@ -1796,7 +1796,7 @@ func (s *defaultOpenAIAccountScheduler) isAccountRequestCompatibleReason(ctx con
 	}
 	// 已知的模型级冷却在评分前排除，避免限流账号占满 Top-K；其他模型不受影响。
 	if account.isModelRateLimitedWithContext(ctx, req.RequestedModel) {
-		return false, "model_rate_limited"
+		return false, account.modelCooldownFilterReason(ctx, req.RequestedModel)
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, account) {
 		return false, "proxy_stream_quarantined"

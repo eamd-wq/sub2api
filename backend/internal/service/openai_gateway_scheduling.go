@@ -406,7 +406,7 @@ func openAICompatibleAccountEligibilityFailureReasonBeforeProfit(ctx context.Con
 	}
 	if !account.IsSchedulableForModelWithContext(ctx, requestedModel) {
 		if account.IsSchedulable() {
-			return "model_rate_limited"
+			return account.modelCooldownFilterReason(ctx, requestedModel)
 		}
 		return "not_schedulable"
 	}
