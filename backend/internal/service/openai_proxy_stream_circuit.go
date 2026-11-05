@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/Wei-Shaw/sub2api/internal/pkg/logger"
+	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 )
 
@@ -235,7 +236,10 @@ func openAIProxyStreamCircuitProxyID(account *Account) (int64, bool) {
 	return *account.ProxyID, true
 }
 
-func (s *OpenAIGatewayService) recordOpenAIProxyStreamDisconnect(account *Account, streamErr error, upstreamRequestID string) {
+func (s *OpenAIGatewayService) recordOpenAIProxyStreamDisconnect(account *Account, streamErr error, upstreamRequestID string, contexts ...*gin.Context) {
+	if account != nil && len(contexts) > 0 && isOpenAIProxyDirectFallback(contexts[0], account.ID) {
+		return
+	}
 	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
 	if !ok || streamErr == nil || errors.Is(streamErr, context.Canceled) || errors.Is(streamErr, context.DeadlineExceeded) {
 		return
@@ -255,7 +259,10 @@ func (s *OpenAIGatewayService) recordOpenAIProxyStreamDisconnect(account *Accoun
 	)
 }
 
-func (s *OpenAIGatewayService) clearOpenAIProxyStreamDisconnect(account *Account) {
+func (s *OpenAIGatewayService) clearOpenAIProxyStreamDisconnect(account *Account, contexts ...*gin.Context) {
+	if account != nil && len(contexts) > 0 && isOpenAIProxyDirectFallback(contexts[0], account.ID) {
+		return
+	}
 	proxyID, ok := openAIProxyStreamCircuitProxyID(account)
 	if !ok {
 		return

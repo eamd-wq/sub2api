@@ -489,6 +489,11 @@ func appendOpsUpstreamError(c *gin.Context, ev OpsUpstreamErrorEvent) {
 		ev.AtUnixMs = time.Now().UnixMilli()
 	}
 	ev.Platform = strings.TrimSpace(ev.Platform)
+	// 回退只属于当前尝试；记录实际出口，不修改共享账号快照或既有错误事件。
+	if isOpenAIProxyDirectFallback(c, ev.AccountID) {
+		ev.ProxyID = nil
+		ev.ProxyName = opsProxyNameDirect
+	}
 	normalizeOpsUpstreamProxyAttribution(&ev)
 	ev.UpstreamRequestID = strings.TrimSpace(ev.UpstreamRequestID)
 	ev.UpstreamResponseBody = strings.TrimSpace(ev.UpstreamResponseBody)
