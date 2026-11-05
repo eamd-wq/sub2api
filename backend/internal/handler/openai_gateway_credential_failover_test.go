@@ -273,7 +273,7 @@ func TestFailoverExhaustionRejectsSecretBearingRetryAfter(t *testing.T) {
 	}, false)
 
 	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
-	require.Empty(t, recorder.Header().Get("Retry-After"))
+	require.Equal(t, "60", recorder.Result().Header.Get("Retry-After"))
 	require.NotContains(t, recorder.Body.String(), "must-not-leak")
 }
 
@@ -291,7 +291,7 @@ func TestFailoverExhaustionRejectsFarFutureRetryAfterDate(t *testing.T) {
 	}, false)
 
 	require.Equal(t, http.StatusTooManyRequests, recorder.Code)
-	require.Empty(t, recorder.Header().Get("Retry-After"))
+	require.Equal(t, "60", recorder.Result().Header.Get("Retry-After"))
 }
 
 func TestFailoverExhaustionAllowsBoundedRetryAfterDate(t *testing.T) {
