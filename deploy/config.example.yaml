@@ -225,6 +225,8 @@ gateway:
   response_header_timeout: 600
   # OpenAI/Codex upstream response header timeout (seconds, 0=disabled)
   # OpenAI/Codex 等待上游响应头超时时间（秒，0=禁用本地响应头超时）
+  # 该独立配置覆盖通用 response_header_timeout；0 时不会继承上面的 600 秒。
+  # 仅限制响应头到达前的等待，已开始的流式长生成不受此计时器截断。
   openai_response_header_timeout: 0
   # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
   # Grok 文本 Responses 首字节超时时间（秒，0=禁用；默认 120）
@@ -554,8 +556,11 @@ gateway:
     # 兜底排队等待超时（时间段）
     fallback_wait_timeout: 30s
     # HTTP 文本请求整池 RPM/TPM 冷却时按最早重置点等待；跨换号累计，0 禁用。
+    # 应短于客户端请求超时，并为恢复后的上游响应留出余量；无法在预算内恢复时返回 Retry-After。
+    # 例如客户端总超时 60 秒，可将本项配置为 30s；75s 默认值保留既有部署行为。
     rate_limit_wait_timeout: 75s
     # 每个网关实例最多同时等待的请求数；超出或超时返回 429 和 Retry-After。
+    # 这是等待请求数上限；上游账号池大小由账号分组决定，增加本值不会增加上游 RPM/TPM。
     rate_limit_max_waiting: 64
     # Fallback max waiting queue size
     # 兜底最大排队长度

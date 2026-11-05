@@ -39,6 +39,24 @@ type noAccountErrorClassification struct {
 var selectionModelRateLimitedPattern = regexp.MustCompile(`(?:model_rate_limited|rate_limited)=(\d+)`)
 var selectionUpstreamModelUnavailablePattern = regexp.MustCompile(`\bupstream_model_unavailable=[1-9][0-9]*\b`)
 
+// ensureRateLimitRetryAfter 只在未提交的 429 缺少重试时间时补充有界兜底。
+// 上游合法值和服务器已计算的精确重置时间优先；容量排队满与上游分钟限流分开退避。
+func ensureRateLimitRetryAfter(c *gin.Context, status int, code string) {
+	if status != http.StatusTooManyRequests || c == nil || c.Writer == nil {
+		return
+	}
+	// 先停心跳再检查状态，已提交的 SSE 200 只能在流内报告错误，不能补写 HTTP 头。
+	service.StopOpenAICompactSSEKeepaliveCommitted(c)
+	if c.Writer.Written() || c.Writer.Header().Get("Retry-After") != "" {
+		return
+	}
+	retryAfter := "60"
+	if code == gatewayQueueFullCode || code == gatewayConcurrencyLimitCode {
+		retryAfter = "1"
+	}
+	c.Header("Retry-After", retryAfter)
+}
+
 // handleRateLimitWaitError 在真正耗尽服务器端等待预算后再返回 429，避免被最后一次上游错误覆盖。
 func (h *OpenAIGatewayHandler) handleRateLimitWaitError(c *gin.Context, err error, streamStarted, anthropic bool) bool {
 	var waitErr *service.OpenAIRateLimitWaitError
@@ -46,7 +64,12 @@ func (h *OpenAIGatewayHandler) handleRateLimitWaitError(c *gin.Context, err erro
 		return false
 	}
 	seconds := max(1, int((waitErr.RetryAfter+time.Second-1)/time.Second))
-	c.Header("Retry-After", strconv.Itoa(seconds))
+	if service.StopOpenAICompactSSEKeepaliveCommitted(c) {
+		streamStarted = true
+	}
+	if !c.Writer.Written() {
+		c.Header("Retry-After", strconv.Itoa(seconds))
+	}
 	message := "All available accounts are currently rate-limited. Server-side wait limit reached; please retry later."
 	if waitErr.QueueFull {
 		message = "All available accounts are currently rate-limited and the server-side waiting queue is full. Please retry later."

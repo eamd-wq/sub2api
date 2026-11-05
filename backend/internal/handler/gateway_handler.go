@@ -2123,6 +2123,7 @@ func (h *GatewayHandler) errorResponse(c *gin.Context, status int, errType, mess
 }
 
 func (h *GatewayHandler) errorResponseWithCode(c *gin.Context, status int, errType, code, message string) {
+	ensureRateLimitRetryAfter(c, status, code)
 	errorObject := gin.H{"type": errType, "message": message}
 	if code != "" {
 		errorObject["code"] = code

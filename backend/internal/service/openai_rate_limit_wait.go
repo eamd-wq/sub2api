@@ -90,16 +90,56 @@ func isOpenAIWaitableModelError(status int, body []byte) bool {
 }
 
 func isOpenAIRPMTPMRateLimit(body []byte) bool {
-	code := strings.ToLower(gjson.GetBytes(body, "error.code").String())
-	if code == "" {
-		code = strings.ToLower(gjson.GetBytes(body, "code").String())
+	if !gjson.ValidBytes(body) {
+		return false
 	}
-	if strings.Contains(code, "rpm") || strings.Contains(code, "tpm") || strings.Contains(code, "requestsperminute") || strings.Contains(code, "tokensperminute") {
-		return true
+	// 兼容顶层与 error 包裹的错误；真实总额度/套餐耗尽优先于速率文案。
+	// quota_exceeded_error 也可能表示 TPM，不能单凭 type 推断分钟级限流。
+	fields := []string{
+		strings.ToLower(gjson.GetBytes(body, "error.code").String()),
+		strings.ToLower(gjson.GetBytes(body, "code").String()),
+		strings.ToLower(gjson.GetBytes(body, "error.message").String()),
+		strings.ToLower(gjson.GetBytes(body, "message").String()),
 	}
-	message := strings.ToLower(gjson.GetBytes(body, "error.message").String())
-	return strings.Contains(message, "requests per minute") || strings.Contains(message, "tokens per minute") ||
-		strings.Contains(message, "rpm limit") || strings.Contains(message, "tpm limit")
+	for _, field := range fields {
+		for _, marker := range []string{"free_quota_exhausted", "insufficient_quota", "token plan entitlement", "entitlement exhausted", "billing_hard_limit"} {
+			if strings.Contains(field, marker) {
+				return false
+			}
+		}
+		if strings.Contains(field, "quota") {
+			for _, scope := range []string{"total", "daily", "weekly", "monthly"} {
+				if strings.Contains(field, scope) {
+					return false
+				}
+			}
+		}
+		if (strings.Contains(field, "balance") || strings.Contains(field, "credit")) &&
+			(strings.Contains(field, "insufficient") || strings.Contains(field, "exhaust") || strings.Contains(field, "not enough") || strings.Contains(field, "out of")) {
+			return false
+		}
+	}
+	for _, code := range fields[:2] {
+		if strings.Contains(code, "requestsperminute") || strings.Contains(code, "tokensperminute") || strings.Contains(code, "requestspersecond") {
+			return true
+		}
+		// 缩写可能恰好出现在其他单词里（如 corpservice），还须有明确的限流语义。
+		limited := strings.Contains(code, "limit") || strings.Contains(code, "exceed") || strings.Contains(code, "exhaust")
+		for _, rate := range []string{"rpm", "tpm", "rps"} {
+			if code == rate || (limited && strings.Contains(code, rate)) {
+				return true
+			}
+		}
+	}
+	// 只接受明确速率文案；未知 429 不进入可恢复短队列。
+	for _, message := range fields[2:] {
+		for _, marker := range []string{"requests per minute", "tokens per minute", "requests per second", "rpm limit", "tpm limit", "rps limit", "rpm exhausted", "tpm exhausted", "rps exhausted"} {
+			if strings.Contains(message, marker) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // openAIRPMTPMResetAt 提取已落库的 RPM/TPM 与明确路由故障短冷却；余额、日配额和未知 429 不进入短队列。

@@ -83,7 +83,8 @@ func CORS(cfg config.CORSConfig) gin.HandlerFunc {
 			}
 			c.Writer.Header().Set("Access-Control-Allow-Headers", allowHeadersValue)
 			c.Writer.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS, GET, PUT, DELETE, PATCH")
-			c.Writer.Header().Set("Access-Control-Expose-Headers", "ETag, Server-Timing")
+			// 让已允许来源的浏览器读取重试协商与请求关联信息，不扩大来源或入站头权限。
+			c.Writer.Header().Set("Access-Control-Expose-Headers", "ETag, Server-Timing, Retry-After, X-Request-ID, X-Client-Request-ID")
 			c.Writer.Header().Set("Access-Control-Max-Age", "86400")
 		}
 		// 处理预检请求

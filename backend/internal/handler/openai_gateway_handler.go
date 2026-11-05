@@ -1596,6 +1596,7 @@ func resolveOpenAIMessagesMetadataSession(c *gin.Context, sessionHash, promptCac
 
 // anthropicErrorResponse writes an error in Anthropic Messages API format.
 func (h *OpenAIGatewayHandler) anthropicErrorResponse(c *gin.Context, status int, errType, message string) {
+	ensureRateLimitRetryAfter(c, status, "")
 	c.JSON(status, gin.H{
 		"type": "error",
 		"error": gin.H{
@@ -3658,7 +3659,11 @@ func credentialFailoverClientResponse(failoverErr *service.UpstreamFailoverError
 }
 
 func copyFailoverRetryAfter(c *gin.Context, headers http.Header) {
-	if c == nil || headers == nil {
+	if c == nil || c.Writer == nil || headers == nil {
+		return
+	}
+	service.StopOpenAICompactSSEKeepaliveCommitted(c)
+	if c.Writer.Written() {
 		return
 	}
 	retryAfter := strings.TrimSpace(headers.Get("Retry-After"))
@@ -3766,6 +3771,7 @@ func (h *OpenAIGatewayHandler) handleStreamingAwareErrorWithCode(
 	}
 
 	// Normal case: return JSON response with proper status code
+	ensureRateLimitRetryAfter(c, status, code)
 	if code == "" {
 		h.errorResponse(c, status, errType, message)
 		return
@@ -3916,6 +3922,7 @@ func (h *OpenAIGatewayHandler) errorResponse(c *gin.Context, status int, errType
 			return
 		}
 	}
+	ensureRateLimitRetryAfter(c, status, "")
 	c.JSON(status, gin.H{
 		"error": gin.H{
 			"type":    errType,
