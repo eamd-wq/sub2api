@@ -1,10 +1,71 @@
 package service
 
 import (
+	"bytes"
+	"fmt"
 	"strings"
+
+	"github.com/Wei-Shaw/sub2api/internal/pkg/openai_compat"
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 )
 
 const openAIResponsesInputTextMaxChars = 10000000
+
+// normalizeOpenAIResponsesMessageTypesForAccount 为显式启用的严格上游补齐消息默认类型。
+// 原始 JSON 项逐段复制，保留文本、工具配对、phase 和数字精度；不重建请求历史。
+func normalizeOpenAIResponsesMessageTypesForAccount(account *Account, body []byte) ([]byte, error) {
+	if account == nil || !account.IsOpenAIApiKey() || account.Extra[openai_compat.ExtraKeyResponsesExplicitMessageType] != true || !gjson.ValidBytes(body) {
+		return body, nil
+	}
+	input := gjson.GetBytes(body, "input")
+	if !input.IsArray() {
+		return body, nil
+	}
+	needsType := func(item gjson.Result) bool {
+		if !item.IsObject() || item.Get("type").Exists() {
+			return false
+		}
+		switch item.Get("role").String() {
+		case "user", "assistant", "system", "developer":
+		default:
+			return false
+		}
+		content := item.Get("content")
+		return content.Type == gjson.String || content.IsArray()
+	}
+	modified := false
+	input.ForEach(func(_, item gjson.Result) bool {
+		modified = needsType(item)
+		return !modified
+	})
+	if !modified {
+		return body, nil
+	}
+	var normalized bytes.Buffer
+	normalized.Grow(len(input.Raw) + 64)
+	normalized.WriteByte('[')
+	first := true
+	input.ForEach(func(_, item gjson.Result) bool {
+		if !first {
+			normalized.WriteByte(',')
+		}
+		first = false
+		if needsType(item) {
+			normalized.WriteString(item.Raw[:len(item.Raw)-1])
+			normalized.WriteString(`,"type":"message"}`)
+		} else {
+			normalized.WriteString(item.Raw)
+		}
+		return true
+	})
+	normalized.WriteByte(']')
+	result, err := sjson.SetRawBytes(body, "input", normalized.Bytes())
+	if err != nil {
+		return nil, fmt.Errorf("normalize Responses message types: %w", err)
+	}
+	return result, nil
+}
 
 // sanitizeOpenAIResponsesOrphanToolOutputs removes tool-output items that have
 // no matching call or item reference anywhere in the current input. Named

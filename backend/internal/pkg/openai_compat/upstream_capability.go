@@ -68,6 +68,10 @@ const ExtraKeyFollowClientProtocol = "openai_follow_client_protocol"
 // 只过滤请求选项，保留 reasoning.effort、输入历史及响应中的思考内容。
 const ExtraKeyStripReasoningSummary = "openai_strip_reasoning_summary"
 
+// ExtraKeyResponsesExplicitMessageType 为严格的 Responses 上游补齐省略的 message 类型。
+// 仅为具有有效 role/content 的消息补默认标记，不改写已有类型或工具项。
+const ExtraKeyResponsesExplicitMessageType = "openai_responses_explicit_message_type"
+
 // ExtraKeyResponsesInputItemLimit 声明原生 Responses 的 input 项数上限。
 // 正整数启用超限请求的 Chat 兼容桥；缺失或非正数保持原来的协议选择。
 const ExtraKeyResponsesInputItemLimit = "openai_responses_input_item_limit"

@@ -1423,7 +1423,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequest(ctx context.Context, c *gin.
 	// previous_response_id，避免携带状态字段被上游拒绝。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
 
-	body, err := filterOpenAIReasoningSummaryForAccount(account, body)
+	body, err := normalizeOpenAIResponsesMessageTypesForAccount(account, body)
+	if err != nil {
+		return nil, err
+	}
+	body, err = filterOpenAIReasoningSummaryForAccount(account, body)
 	if err != nil {
 		return nil, err
 	}

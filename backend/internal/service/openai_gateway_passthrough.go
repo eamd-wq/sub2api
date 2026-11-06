@@ -612,7 +612,11 @@ func (s *OpenAIGatewayService) buildUpstreamRequestOpenAIPassthrough(
 	// DeepSeek / Kimi 原生 Responses 端点为无状态实现（见 normalizeDeepSeekResponsesRequestBody）。
 	body = normalizeDeepSeekResponsesRequestBody(account, body)
 
-	body, err := filterOpenAIReasoningSummaryForAccount(account, body)
+	body, err := normalizeOpenAIResponsesMessageTypesForAccount(account, body)
+	if err != nil {
+		return nil, err
+	}
+	body, err = filterOpenAIReasoningSummaryForAccount(account, body)
 	if err != nil {
 		return nil, err
 	}
